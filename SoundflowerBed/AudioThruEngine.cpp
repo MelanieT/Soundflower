@@ -332,49 +332,71 @@ OSStatus AudioThruEngine::OutputIOProc (	AudioDeviceID			inDevice,
 		
 		// not the most efficient, but this should handle devices with multiple streams [i think]
 		// with identitical formats [we know soundflower input channels are always one stream]
-		UInt32 innchnls = This->mInputDevice.mFormat.mChannelsPerFrame;
-		
-		// iSchemy's edit
-		//
-		// this solution will probably be a little bit less efficient
-		// but I wanted to retain the functionality of previous solution
-		// and only add new function
-		// Activity Monitor says it's not bad. 14.8MB and 3% CPU for me
-		// is IMHO insignificant
-		UInt32* chanstart = new UInt32[16];
-			
-		for (UInt32 buf = 0; buf < outOutputData->mNumberBuffers; buf++)
-		{
-			for (int i = 0; i < 16; i++)
-				chanstart[i] = 0;
-			UInt32 outnchnls = outOutputData->mBuffers[buf].mNumberChannels;
-			for (UInt32 chan = 0; chan < 
-					((This->CloneChannels() && innchnls==2) ? outnchnls : innchnls);
-					chan++)
-			{
-				UInt32 outChan = This->GetChannelMap(chan) - chanstart[chan];		
-				if (outChan >= 0 && outChan < outnchnls)
-				{
-					// odd-even
-					float *in = (float *)This->mWorkBuf + (chan % innchnls); 
-					float *out = (float *)outOutputData->mBuffers[buf].mData + outChan;		
-					long framesize = outnchnls * sizeof(float);
+        UInt32 innchnls = This->mInputDevice.mFormat.mChannelsPerFrame;
 
-					for (UInt32 frame = 0; frame < outOutputData->mBuffers[buf].mDataByteSize; frame += framesize )
-					{
-						*out += *in;
-						in += innchnls;
-						out += outnchnls;
-					}
-				}
-				chanstart[chan] += outnchnls;
-			}
-		}
-		
-		delete [] chanstart;
-		
-		//
-		// end
+        // If we want to clone channels, we have to ignore the channel map.
+        // Cloning using the map is not really possible because adjacent
+        // channels are not guaranteed to be stereo pairs.
+
+        if (This->CloneChannels())
+        {
+            // Input channel base
+            UInt32 chan = 0;
+
+            // Go through buffers and buffer channels, applying inout channels as we go
+            for (UInt32 buf = 0; buf < outOutputData->mNumberBuffers; buf++)
+            {
+                // Buffers may not all be the same
+                UInt32 outnchnls = outOutputData->mBuffers[buf].mNumberChannels;
+
+                for (UInt32 outChan = 0 ; outChan < outnchnls ; outChan += 1)
+                {
+                    float *in = (float *)This->mWorkBuf + (chan % innchnls);
+                    float *out = (float *)outOutputData->mBuffers[buf].mData + outChan;
+                    long framesize = outnchnls * sizeof(float);
+
+                    // Copy the frame data
+                    for (UInt32 frame = 0; frame < outOutputData->mBuffers[buf].mDataByteSize; frame += framesize )
+                    {
+                        *out += *in;
+                        in += innchnls;
+                        out += outnchnls;
+                    }
+
+                    // Just do them one by one. Stereo? Huh?
+                    chan++;
+                }
+            }
+        }
+        else
+        {
+            for (UInt32 chan = 0; chan < innchnls; chan++)
+            {
+                UInt32 chanstart = 0;
+
+                for (UInt32 buf = 0; buf < outOutputData->mNumberBuffers; buf++)
+                {
+                    UInt32 outChan = This->GetChannelMap(chan) - chanstart;
+                    UInt32 outnchnls = outOutputData->mBuffers[buf].mNumberChannels;
+                    if (outChan >= 0 && outChan < outnchnls)
+                    {
+                        float *in = (float *)This->mWorkBuf + chan;
+                        float *out = (float *)outOutputData->mBuffers[buf].mData + outChan;
+                        long framesize = outnchnls * sizeof(float);
+
+                        for (UInt32 frame = 0; frame < outOutputData->mBuffers[buf].mDataByteSize; frame += framesize )
+                        {
+                            *out += *in;
+                            in += innchnls;
+                            out += outnchnls;
+                        }
+                    }
+
+                    chanstart += outnchnls;
+                }
+            }
+        }
+
 					
 		This->mThruTime = delta;
 		
